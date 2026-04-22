@@ -274,18 +274,30 @@
       progressSection.style.display = 'block';
       updateProgressBar(0, total);
 
+      let notFoundRetries = 0;
+      const MAX_RETRIES   = 4;   // tolerate brief server restarts
+
       pollTimer = setInterval(async () => {
         try {
           const res  = await fetch(`/progress/${taskId}`);
           const data = await res.json();
 
           if (data.error) {
+            // "Task not found" can happen if server restarted — retry a few times
+            if (res.status === 404 && notFoundRetries < MAX_RETRIES) {
+              notFoundRetries++;
+              progressLabel.textContent = `Reconnecting… (${notFoundRetries}/${MAX_RETRIES})`;
+              return;
+            }
             clearInterval(pollTimer);
             showUploadSection();
-            showError(data.error);
+            showError(res.status === 404
+              ? 'The server restarted mid-download. Please try again.'
+              : data.error);
             return;
           }
 
+          notFoundRetries = 0;   // reset on success
           updateProgressBar(data.done, data.total);
 
           if (data.status === 'done') {
@@ -367,7 +379,10 @@
     function showUploadSection() {
       submitBtn.disabled = false;
       submitBtn.innerHTML = '<span class="btn-icon">⬇️</span> Download All Resumes';
-      uploadSection.style.display = 'block';
+      // Always hide other sections before showing upload
+      progressSection.style.display = 'none';
+      resultsSection.style.display  = 'none';
+      uploadSection.style.display   = 'block';
     }
 
     // ── Helpers ───────────────────────────────────────────────
