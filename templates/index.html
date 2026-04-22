@@ -52,19 +52,6 @@
           </div>
         </div>
 
-        <!-- Folder Path -->
-        <div class="form-group">
-          <label for="folder_path" class="form-label">Save Folder Path <span class="required">*</span></label>
-          <input
-            type="text"
-            id="folder_path"
-            name="folder_path"
-            class="text-input"
-            placeholder="e.g. C:\Resumes\Batch2024  or  /Users/you/Resumes"
-          />
-          <p class="input-hint">The folder will be created automatically if it doesn't exist.</p>
-        </div>
-
         <!-- Error Banner -->
         <div class="alert alert-error" id="errorBanner" style="display:none;">
           <span class="alert-icon">⚠️</span>
@@ -200,6 +187,10 @@
       if (fileInput.files.length) setFile(fileInput.files[0]);
     });
 
+    // Stop click on the hidden input from bubbling up to dropZone
+    // (prevents the file dialog from opening twice)
+    fileInput.addEventListener('click', e => e.stopPropagation());
+
     removeFileBtn.addEventListener('click', e => {
       e.stopPropagation();
       clearFile();
@@ -236,12 +227,6 @@
 
       if (!fileInput.files.length) {
         showError('Please select an Excel file.');
-        return;
-      }
-
-      const folderPath = document.getElementById('folder_path').value.trim();
-      if (!folderPath) {
-        showError('Please enter the save folder path.');
         return;
       }
 

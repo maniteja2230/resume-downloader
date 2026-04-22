@@ -254,34 +254,20 @@ def index():
 @app.route("/upload", methods=["POST"])
 def upload():
     """
-    Handle Excel file upload and folder path submission.
-    Validates inputs, parses Excel, and starts the background download worker.
-    Returns a JSON response with a task_id for progress polling.
+    Handle Excel file upload. No folder path needed — files go into a
+    per-task temp directory and are served back as a ZIP download.
     """
     # ── Validate file presence ──────────────────────────────────────────────
     if "excel_file" not in request.files:
         return jsonify({"error": "No file uploaded."}), 400
 
     file = request.files["excel_file"]
-    folder_path = request.form.get("folder_path", "").strip()
 
     if file.filename == "":
         return jsonify({"error": "No file selected."}), 400
 
     if not allowed_file(file.filename):
         return jsonify({"error": "Invalid file type. Please upload an .xlsx or .xls file."}), 400
-
-    # ── Validate folder path ────────────────────────────────────────────────
-    if not folder_path:
-        return jsonify({"error": "Please provide a folder path to save resumes."}), 400
-
-    try:
-        os.makedirs(folder_path, exist_ok=True)
-    except OSError as e:
-        return jsonify({"error": f"Cannot create/access folder: {e}"}), 400
-
-    if not os.path.isdir(folder_path):
-        return jsonify({"error": "Provided path is not a valid directory."}), 400
 
     # ── Save uploaded file ──────────────────────────────────────────────────
     filename = secure_filename(file.filename)
@@ -344,11 +330,15 @@ def upload():
     if not records:
         return jsonify({"error": "No valid rows found in the Excel file."}), 400
 
-    # ── Start background task ───────────────────────────────────────────────
-    task_id = str(time.time_ns())
+    # ── Create per-task temp folder & start background task ─────────────────
+    import tempfile
+    task_id     = str(time.time_ns())
+    save_folder = os.path.join(tempfile.gettempdir(), f"resumes_{task_id}")
+    os.makedirs(save_folder, exist_ok=True)
+
     thread = threading.Thread(
         target=run_downloads,
-        args=(task_id, records, folder_path),
+        args=(task_id, records, save_folder),
         daemon=True,
     )
     thread.start()
