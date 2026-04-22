@@ -103,6 +103,11 @@
       <!-- Result List -->
       <ul class="result-list" id="resultList"></ul>
 
+      <!-- ZIP Download Button -->
+      <a class="btn btn-zip" id="zipBtn" style="display:none;" download>
+        <span class="btn-icon">🗜️</span> Download All as ZIP
+      </a>
+
       <!-- Reset Button -->
       <button class="btn btn-secondary" id="resetBtn">
         ↩ Start Over
@@ -170,8 +175,10 @@
 
     const summaryChips = document.getElementById('summaryChips');
     const resultList   = document.getElementById('resultList');
+    const zipBtn       = document.getElementById('zipBtn');
     const resetBtn     = document.getElementById('resetBtn');
 
+    let currentTaskId = null;
     let pollTimer = null;
 
     // ── File drag-and-drop ────────────────────────────────────
@@ -253,6 +260,7 @@
         }
 
         // Start polling
+        currentTaskId = json.task_id;
         startProgress(json.task_id, json.total);
 
       } catch (err) {
@@ -282,7 +290,7 @@
 
           if (data.status === 'done') {
             clearInterval(pollTimer);
-            showResults(data.results, data.summary);
+            showResults(data.results, data.summary, currentTaskId);
           } else {
             const latest = data.results[data.results.length - 1];
             if (latest) {
@@ -303,7 +311,7 @@
     }
 
     // ── Results ───────────────────────────────────────────────
-    function showResults(results, summary) {
+    function showResults(results, summary, taskId) {
       progressSection.style.display = 'none';
       resultsSection.style.display  = 'block';
 
@@ -314,6 +322,14 @@
         <div class="chip chip-warn">⚠️ Skipped: ${summary.skipped}</div>
         <div class="chip chip-fail">❌ Failed: ${summary.failed}</div>
       `;
+
+      // ZIP button — only show if at least 1 was downloaded
+      if (summary.downloaded > 0 && taskId) {
+        zipBtn.href = `/download-zip/${taskId}`;
+        zipBtn.style.display = 'inline-flex';
+      } else {
+        zipBtn.style.display = 'none';
+      }
 
       // Result rows
       resultList.innerHTML = '';
@@ -340,6 +356,9 @@
       clearFile();
       resultList.innerHTML   = '';
       summaryChips.innerHTML = '';
+      zipBtn.style.display          = 'none';
+      zipBtn.href                   = '#';
+      currentTaskId                 = null;
       resultsSection.style.display  = 'none';
       progressSection.style.display = 'none';
       showUploadSection();

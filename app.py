@@ -9,6 +9,7 @@ import os
 import re
 import io
 import time
+import zipfile
 import threading
 
 import pandas as pd
@@ -139,14 +140,14 @@ MAX_WORKERS = 20   # simultaneous download threads
 def _download_one(record: dict, save_folder: str) -> dict:
     """
     Download a single resume. Called in a thread-pool worker.
-    Returns a result dict with name, status, icon, link.
+    Returns a result dict with name, status, icon, link, and (on success) save_path.
     """
     name = record["name"]
     link = record["link"]
 
     file_id = extract_drive_file_id(link)
     if not file_id:
-        return {"name": name, "status": "Invalid Link", "icon": "❌", "link": link}
+        return {"name": name, "status": "Invalid Link", "icon": "❌", "link": link, "save_path": None}
 
     download_url = build_download_url(file_id)
     safe_name    = sanitize_filename(name)
@@ -160,6 +161,7 @@ def _download_one(record: dict, save_folder: str) -> dict:
             "status": f"Downloaded → {os.path.basename(save_path)}",
             "icon": "✅",
             "link": link,
+            "save_path": save_path,
         }
 
     # Clean up partial file
@@ -170,7 +172,7 @@ def _download_one(record: dict, save_folder: str) -> dict:
             pass
 
     icon = "⚠️" if "No Access" in message else "❌"
-    return {"name": name, "status": message, "icon": icon, "link": link}
+    return {"name": name, "status": message, "icon": icon, "link": link, "save_path": None}
 
 
 def run_downloads(task_id: str, records: list[dict], save_folder: str):
@@ -180,20 +182,23 @@ def run_downloads(task_id: str, records: list[dict], save_folder: str):
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    total      = len(records)
-    results    = []
-    downloaded = 0
-    skipped    = 0
-    failed     = 0
-    lock       = threading.Lock()
+    total       = len(records)
+    results     = []
+    saved_paths = []   # paths of successfully downloaded files (for ZIP)
+    downloaded  = 0
+    skipped     = 0
+    failed      = 0
+    lock        = threading.Lock()
 
     with progress_lock:
         progress_store[task_id] = {
-            "status":  "running",
-            "total":   total,
-            "done":    0,
-            "results": [],
-            "summary": {},
+            "status":      "running",
+            "total":       total,
+            "done":        0,
+            "results":     [],
+            "summary":     {},
+            "save_folder": save_folder,
+            "saved_paths": [],
         }
 
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, total)) as pool:
@@ -206,9 +211,14 @@ def run_downloads(task_id: str, records: list[dict], save_folder: str):
             result = future.result()
 
             with lock:
-                results.append(result)
+                # Strip save_path before sending to frontend (internal only)
+                display_result = {k: v for k, v in result.items() if k != "save_path"}
+                results.append(display_result)
+
                 if result["icon"] == "✅":
                     downloaded += 1
+                    if result.get("save_path"):
+                        saved_paths.append(result["save_path"])
                 elif result["icon"] == "⚠️":
                     skipped += 1
                 else:
@@ -217,8 +227,9 @@ def run_downloads(task_id: str, records: list[dict], save_folder: str):
                 done_count = len(results)
 
             with progress_lock:
-                progress_store[task_id]["done"]    = done_count
-                progress_store[task_id]["results"] = list(results)
+                progress_store[task_id]["done"]        = done_count
+                progress_store[task_id]["results"]     = list(results)
+                progress_store[task_id]["saved_paths"] = list(saved_paths)
 
     # ── Mark complete ───────────────────────────────────────────────────────
     with progress_lock:
@@ -358,6 +369,43 @@ def progress(task_id: str):
         return jsonify({"error": "Task not found."}), 404
 
     return jsonify(data)
+
+
+@app.route("/download-zip/<task_id>")
+def download_zip(task_id: str):
+    """
+    Build an in-memory ZIP of all successfully downloaded PDFs for this task
+    and send it to the browser as 'resumes.zip'.
+    """
+    from flask import send_file
+
+    with progress_lock:
+        data = progress_store.get(task_id)
+
+    if data is None:
+        return jsonify({"error": "Task not found."}), 404
+
+    if data.get("status") != "done":
+        return jsonify({"error": "Downloads are still in progress."}), 400
+
+    saved_paths = data.get("saved_paths", [])
+    if not saved_paths:
+        return jsonify({"error": "No files were downloaded successfully."}), 400
+
+    # Build ZIP in memory
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in saved_paths:
+            if os.path.exists(path):
+                zf.write(path, arcname=os.path.basename(path))
+
+    zip_buffer.seek(0)
+    return send_file(
+        zip_buffer,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="resumes.zip",
+    )
 
 
 # ─── Entry Point ──────────────────────────────────────────────────────────────
