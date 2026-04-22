@@ -360,6 +360,7 @@ def progress(task_id: str):
     """
     Polling endpoint: returns current progress for the given task.
     The frontend polls this every second.
+    Strips zip_bytes (not JSON-serializable) and replaces it with has_zip bool.
     """
     with progress_lock:
         data = progress_store.get(task_id)
@@ -367,7 +368,11 @@ def progress(task_id: str):
     if data is None:
         return jsonify({"error": "Task not found."}), 404
 
-    return jsonify(data)
+    # zip_bytes are raw bytes — not JSON-serializable. Strip them and
+    # send a simple boolean flag so the frontend knows a ZIP is ready.
+    safe = {k: v for k, v in data.items() if k != "zip_bytes"}
+    safe["has_zip"] = bool(data.get("zip_bytes"))
+    return jsonify(safe)
 
 
 @app.route("/download-zip/<task_id>")

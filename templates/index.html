@@ -259,7 +259,7 @@
 
           if (data.status === 'done') {
             clearInterval(pollTimer);
-            showResults(data.results, data.summary, currentTaskId);
+            showResults(data.results, data.summary, currentTaskId, data.has_zip);
           } else {
             const latest = data.results[data.results.length - 1];
             if (latest) {
@@ -280,7 +280,7 @@
     }
 
     // ── Results ───────────────────────────────────────────────
-    function showResults(results, summary, taskId) {
+    function showResults(results, summary, taskId, hasZip) {
       progressSection.style.display = 'none';
       resultsSection.style.display  = 'block';
 
@@ -292,8 +292,8 @@
         <div class="chip chip-fail">❌ Failed: ${summary.failed}</div>
       `;
 
-      // ZIP button — only show if at least 1 was downloaded
-      if (summary.downloaded > 0 && taskId) {
+      // ZIP button — only show if backend confirmed a ZIP is ready
+      if (hasZip && taskId) {
         zipBtn.href = `/download-zip/${taskId}`;
         zipBtn.style.display = 'inline-flex';
       } else {
