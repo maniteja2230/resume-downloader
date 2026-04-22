@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bulk Resume Downloader – Placement Team Tool</title>
+  <meta name="description" content="Upload an Excel file with student names and Google Drive resume links. Download all publicly accessible PDFs in one click." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- ── Header ─────────────────────────────────────────── -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-icon">📥</span>
+        <span class="logo-text">ResumeSync</span>
+      </div>
+      <p class="header-tagline">Bulk Resume Downloader for Placement Teams</p>
+    </div>
+  </header>
+
+  <!-- ── Main Content ───────────────────────────────────── -->
+  <main class="main">
+
+    <!-- Upload Card -->
+    <section class="card upload-card" id="uploadSection">
+      <h1 class="card-title">Download Resumes in Bulk</h1>
+      <p class="card-subtitle">
+        Upload an Excel file with <code>name</code> and <code>resume_link</code> columns.<br />
+        All publicly accessible Google Drive PDFs will be downloaded automatically.
+      </p>
+
+      <form id="uploadForm" enctype="multipart/form-data" novalidate>
+
+        <!-- Excel Upload -->
+        <div class="form-group">
+          <label for="excel_file" class="form-label">Excel File <span class="required">*</span></label>
+          <div class="file-drop-zone" id="dropZone">
+            <input type="file" id="excel_file" name="excel_file" accept=".xlsx,.xls" class="file-input" />
+            <div class="drop-content" id="dropContent">
+              <span class="drop-icon">📊</span>
+              <p class="drop-text">Drag & drop your Excel file here<br /><span class="drop-hint">or <strong>click to browse</strong></span></p>
+              <p class="drop-formats">Accepts: .xlsx, .xls</p>
+            </div>
+            <div class="file-chosen" id="fileChosen" style="display:none;">
+              <span class="file-icon">📄</span>
+              <span id="fileName" class="file-name"></span>
+              <button type="button" class="file-remove" id="removeFile" title="Remove file">✕</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Folder Path -->
+        <div class="form-group">
+          <label for="folder_path" class="form-label">Save Folder Path <span class="required">*</span></label>
+          <input
+            type="text"
+            id="folder_path"
+            name="folder_path"
+            class="text-input"
+            placeholder="e.g. C:\Resumes\Batch2024  or  /Users/you/Resumes"
+          />
+          <p class="input-hint">The folder will be created automatically if it doesn't exist.</p>
+        </div>
+
+        <!-- Error Banner -->
+        <div class="alert alert-error" id="errorBanner" style="display:none;">
+          <span class="alert-icon">⚠️</span>
+          <span id="errorMsg"></span>
+        </div>
+
+        <!-- Submit -->
+        <button type="submit" class="btn btn-primary" id="submitBtn">
+          <span class="btn-icon">⬇️</span> Download All Resumes
+        </button>
+      </form>
+    </section>
+
+    <!-- Progress Card -->
+    <section class="card progress-card" id="progressSection" style="display:none;">
+      <h2 class="card-title">Downloading Resumes…</h2>
+
+      <div class="progress-meta">
+        <span id="progressCount" class="progress-count">0 / 0</span>
+        <span id="progressPercent" class="progress-percent">0%</span>
+      </div>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-fill" id="progressFill" style="width:0%"></div>
+      </div>
+
+      <p class="progress-label" id="progressLabel">Preparing…</p>
+    </section>
+
+    <!-- Results Card -->
+    <section class="card results-card" id="resultsSection" style="display:none;">
+      <h2 class="card-title">Results</h2>
+
+      <!-- Summary Chips -->
+      <div class="summary-chips" id="summaryChips"></div>
+
+      <!-- Result List -->
+      <ul class="result-list" id="resultList"></ul>
+
+      <!-- Reset Button -->
+      <button class="btn btn-secondary" id="resetBtn">
+        ↩ Start Over
+      </button>
+    </section>
+
+    <!-- Excel Format Guide -->
+    <section class="card info-card">
+      <h2 class="info-title">📋 Excel File Format</h2>
+      <p class="info-desc">Your Excel file must have exactly these two column headers (case-insensitive):</p>
+      <div class="table-wrap">
+        <table class="sample-table">
+          <thead>
+            <tr><th>name</th><th>resume_link</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Ravi Kumar</td>
+              <td>https://drive.google.com/file/d/1ABC.../view?usp=sharing</td>
+            </tr>
+            <tr>
+              <td>Priya Sharma</td>
+              <td>https://drive.google.com/open?id=1XYZ...</td>
+            </tr>
+            <tr>
+              <td>Arjun Mehta</td>
+              <td>https://drive.google.com/uc?id=1DEF...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ── Footer ─────────────────────────────────────────── -->
+  <footer class="footer">
+    <p>ResumeSync &copy; 2024 · Built for College Placement Teams</p>
+  </footer>
+
+  <script>
+  (() => {
+    'use strict';
+
+    // ── DOM refs ──────────────────────────────────────────────
+    const form          = document.getElementById('uploadForm');
+    const dropZone      = document.getElementById('dropZone');
+    const fileInput     = document.getElementById('excel_file');
+    const dropContent   = document.getElementById('dropContent');
+    const fileChosen    = document.getElementById('fileChosen');
+    const fileNameEl    = document.getElementById('fileName');
+    const removeFileBtn = document.getElementById('removeFile');
+    const submitBtn     = document.getElementById('submitBtn');
+    const errorBanner   = document.getElementById('errorBanner');
+    const errorMsg      = document.getElementById('errorMsg');
+
+    const uploadSection   = document.getElementById('uploadSection');
+    const progressSection = document.getElementById('progressSection');
+    const resultsSection  = document.getElementById('resultsSection');
+
+    const progressCount   = document.getElementById('progressCount');
+    const progressPercent = document.getElementById('progressPercent');
+    const progressFill    = document.getElementById('progressFill');
+    const progressLabel   = document.getElementById('progressLabel');
+
+    const summaryChips = document.getElementById('summaryChips');
+    const resultList   = document.getElementById('resultList');
+    const resetBtn     = document.getElementById('resetBtn');
+
+    let pollTimer = null;
+
+    // ── File drag-and-drop ────────────────────────────────────
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    dropZone.addEventListener('dragover', e => {
+      e.preventDefault();
+      dropZone.classList.add('drag-over');
+    });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropZone.classList.remove('drag-over');
+      const files = e.dataTransfer.files;
+      if (files.length) setFile(files[0]);
+    });
+
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files.length) setFile(fileInput.files[0]);
+    });
+
+    removeFileBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      clearFile();
+    });
+
+    function setFile(file) {
+      fileNameEl.textContent = file.name;
+      dropContent.style.display = 'none';
+      fileChosen.style.display  = 'flex';
+    }
+
+    function clearFile() {
+      fileInput.value = '';
+      fileChosen.style.display  = 'none';
+      dropContent.style.display = 'flex';
+    }
+
+    // ── Show / hide error ─────────────────────────────────────
+    function showError(msg) {
+      errorMsg.textContent = msg;
+      errorBanner.style.display = 'flex';
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = '<span class="btn-icon">⬇️</span> Download All Resumes';
+    }
+
+    function hideError() {
+      errorBanner.style.display = 'none';
+    }
+
+    // ── Form submit ───────────────────────────────────────────
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      hideError();
+
+      if (!fileInput.files.length) {
+        showError('Please select an Excel file.');
+        return;
+      }
+
+      const folderPath = document.getElementById('folder_path').value.trim();
+      if (!folderPath) {
+        showError('Please enter the save folder path.');
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<span class="spinner"></span> Uploading…';
+
+      const data = new FormData(form);
+
+      try {
+        const res  = await fetch('/upload', { method: 'POST', body: data });
+        const json = await res.json();
+
+        if (!res.ok || json.error) {
+          showError(json.error || 'Upload failed. Please try again.');
+          return;
+        }
+
+        // Start polling
+        startProgress(json.task_id, json.total);
+
+      } catch (err) {
+        showError('Network error: ' + err.message);
+      }
+    });
+
+    // ── Progress polling ──────────────────────────────────────
+    function startProgress(taskId, total) {
+      uploadSection.style.display   = 'none';
+      progressSection.style.display = 'block';
+      updateProgressBar(0, total);
+
+      pollTimer = setInterval(async () => {
+        try {
+          const res  = await fetch(`/progress/${taskId}`);
+          const data = await res.json();
+
+          if (data.error) {
+            clearInterval(pollTimer);
+            showUploadSection();
+            showError(data.error);
+            return;
+          }
+
+          updateProgressBar(data.done, data.total);
+
+          if (data.status === 'done') {
+            clearInterval(pollTimer);
+            showResults(data.results, data.summary);
+          } else {
+            const latest = data.results[data.results.length - 1];
+            if (latest) {
+              progressLabel.textContent = `Processing: ${latest.name}`;
+            }
+          }
+        } catch {
+          // network blip – keep polling
+        }
+      }, 800);
+    }
+
+    function updateProgressBar(done, total) {
+      const pct = total ? Math.round((done / total) * 100) : 0;
+      progressFill.style.width    = pct + '%';
+      progressCount.textContent   = `${done} / ${total}`;
+      progressPercent.textContent = pct + '%';
+    }
+
+    // ── Results ───────────────────────────────────────────────
+    function showResults(results, summary) {
+      progressSection.style.display = 'none';
+      resultsSection.style.display  = 'block';
+
+      // Summary chips
+      summaryChips.innerHTML = `
+        <div class="chip chip-total">📦 Total: ${summary.total}</div>
+        <div class="chip chip-success">✅ Downloaded: ${summary.downloaded}</div>
+        <div class="chip chip-warn">⚠️ Skipped: ${summary.skipped}</div>
+        <div class="chip chip-fail">❌ Failed: ${summary.failed}</div>
+      `;
+
+      // Result rows
+      resultList.innerHTML = '';
+      results.forEach(r => {
+        const li = document.createElement('li');
+        li.classList.add('result-item');
+        if (r.icon === '✅') li.classList.add('result-ok');
+        else if (r.icon === '⚠️') li.classList.add('result-warn');
+        else li.classList.add('result-fail');
+
+        li.innerHTML = `
+          <span class="result-icon">${r.icon}</span>
+          <div class="result-info">
+            <span class="result-name">${escapeHtml(r.name)}</span>
+            <span class="result-status">${escapeHtml(r.status)}</span>
+          </div>
+        `;
+        resultList.appendChild(li);
+      });
+    }
+
+    // ── Reset ─────────────────────────────────────────────────
+    resetBtn.addEventListener('click', () => {
+      clearFile();
+      resultList.innerHTML   = '';
+      summaryChips.innerHTML = '';
+      resultsSection.style.display  = 'none';
+      progressSection.style.display = 'none';
+      showUploadSection();
+    });
+
+    function showUploadSection() {
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = '<span class="btn-icon">⬇️</span> Download All Resumes';
+      uploadSection.style.display = 'block';
+    }
+
+    // ── Helpers ───────────────────────────────────────────────
+    function escapeHtml(str) {
+      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+  })();
+  </script>
+</body>
+</html>

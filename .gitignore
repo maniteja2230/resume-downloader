@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+env/
+uploads/*.xlsx
+uploads/*.xls
+dist/
+build/
+*.spec.bak
+.DS_Store
+sample_students.xlsx

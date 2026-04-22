@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: resume-downloader
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 4 --threads 8 --timeout 120 --bind 0.0.0.0:$PORT
+    plan: free
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
