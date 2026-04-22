@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Bulk Resume Downloader – Placement Team Tool</title>
-  <meta name="description" content="Upload an Excel file with student names and Google Drive resume links. Download all publicly accessible PDFs in one click." />
+  <meta name="description" content="Upload an Excel file with Google Drive resume links. Download all publicly accessible PDFs." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/style.css" />
@@ -12,13 +12,10 @@
 <body>
   <!-- ── Header ─────────────────────────────────────────── -->
   <header class="header">
-    <div class="header-inner">
       <div class="logo">
         <span class="logo-icon">📥</span>
-        <span class="logo-text">ResumeSync</span>
+        <span class="logo-text">Resume Downloader</span>
       </div>
-      <p class="header-tagline">Bulk Resume Downloader for Placement Teams</p>
-    </div>
   </header>
 
   <!-- ── Main Content ───────────────────────────────────── -->
@@ -41,7 +38,7 @@
             <input type="file" id="excel_file" name="excel_file" accept=".xlsx,.xls" class="file-input" />
             <div class="drop-content" id="dropContent">
               <span class="drop-icon">📊</span>
-              <p class="drop-text">Drag & drop your Excel file here<br /><span class="drop-hint">or <strong>click to browse</strong></span></p>
+              <p class="drop-text">Drag &amp; drop your Excel file here<br /><span class="drop-hint">or <strong>click to browse</strong></span></p>
               <p class="drop-formats">Accepts: .xlsx, .xls</p>
             </div>
             <div class="file-chosen" id="fileChosen" style="display:none;">
@@ -101,32 +98,7 @@
       </button>
     </section>
 
-    <!-- Excel Format Guide -->
-    <section class="card info-card">
-      <h2 class="info-title">📋 Excel File Format</h2>
-      <p class="info-desc">Your Excel file must have exactly these two column headers (case-insensitive):</p>
-      <div class="table-wrap">
-        <table class="sample-table">
-          <thead>
-            <tr><th>name</th><th>resume_link</th></tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Ravi Kumar</td>
-              <td>https://drive.google.com/file/d/1ABC.../view?usp=sharing</td>
-            </tr>
-            <tr>
-              <td>Priya Sharma</td>
-              <td>https://drive.google.com/open?id=1XYZ...</td>
-            </tr>
-            <tr>
-              <td>Arjun Mehta</td>
-              <td>https://drive.google.com/uc?id=1DEF...</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+   
 
   </main>
 
