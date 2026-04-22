@@ -96,10 +96,10 @@ def unique_filepath(folder: str, base_name: str, ext: str = ".pdf") -> str:
     return path
 
 
-def download_resume(url: str, save_path: str, timeout: int = 30) -> tuple[bool, str]:
+def download_resume_bytes(url: str, timeout: int = 30) -> tuple[bool, str, bytes | None]:
     """
-    Attempt to download a file from `url` and save it to `save_path`.
-    Returns (success: bool, message: str).
+    Attempt to download a file from `url` into memory.
+    Returns (success: bool, message: str, data: bytes | None).
     """
     try:
         response = requests.get(url, timeout=timeout, stream=True, allow_redirects=True)
@@ -109,27 +109,25 @@ def download_resume(url: str, save_path: str, timeout: int = 30) -> tuple[bool, 
             content_type = response.headers.get("Content-Type", "")
             # If we get an HTML page instead of a PDF, it's likely a restriction page
             if "text/html" in content_type:
-                return False, "No Access (restricted or requires sign-in)"
+                return False, "No Access (restricted or requires sign-in)", None
 
-            with open(save_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-            return True, "Downloaded"
+            buf = io.BytesIO()
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    buf.write(chunk)
+            return True, "Downloaded", buf.getvalue()
 
         elif response.status_code in (401, 403, 404):
-            return False, f"No Access (HTTP {response.status_code})"
+            return False, f"No Access (HTTP {response.status_code})", None
         else:
-            return False, f"Failed (HTTP {response.status_code})"
+            return False, f"Failed (HTTP {response.status_code})", None
 
     except requests.exceptions.Timeout:
-        return False, "Failed (Timeout)"
+        return False, "Failed (Timeout)", None
     except requests.exceptions.ConnectionError:
-        return False, "Failed (Connection Error)"
+        return False, "Failed (Connection Error)", None
     except requests.exceptions.RequestException as e:
-        return False, f"Failed ({str(e)[:60]})"
-    except OSError as e:
-        return False, f"Failed (File Error: {str(e)[:60]})"
+        return False, f"Failed ({str(e)[:60]})", None
 
 
 # ─── Background Download Worker ───────────────────────────────────────────────
@@ -137,73 +135,77 @@ def download_resume(url: str, save_path: str, timeout: int = 30) -> tuple[bool, 
 MAX_WORKERS = 20   # simultaneous download threads
 
 
-def _download_one(record: dict, save_folder: str) -> dict:
+def _download_one(record: dict, name_counter: dict, counter_lock: threading.Lock) -> dict:
     """
-    Download a single resume. Called in a thread-pool worker.
-    Returns a result dict with name, status, icon, link, and (on success) save_path.
+    Download a single resume into memory. Called in a thread-pool worker.
+    Returns a result dict with name, status, icon, link, and (on success) pdf_name + pdf_bytes.
     """
     name = record["name"]
     link = record["link"]
 
     file_id = extract_drive_file_id(link)
     if not file_id:
-        return {"name": name, "status": "Invalid Link", "icon": "❌", "link": link, "save_path": None}
+        return {"name": name, "status": "Invalid Link", "icon": "❌", "link": link,
+                "pdf_name": None, "pdf_bytes": None}
 
     download_url = build_download_url(file_id)
-    safe_name    = sanitize_filename(name)
-    save_path    = unique_filepath(save_folder, safe_name)
+    success, message, pdf_bytes = download_resume_bytes(download_url)
 
-    success, message = download_resume(download_url, save_path)
+    if success and pdf_bytes:
+        safe_name = sanitize_filename(name)
+        # Generate a unique archive name without touching the disk
+        with counter_lock:
+            count = name_counter.get(safe_name, 0)
+            name_counter[safe_name] = count + 1
+        pdf_name = f"{safe_name}.pdf" if count == 0 else f"{safe_name}_{count}.pdf"
 
-    if success:
         return {
             "name": name,
-            "status": f"Downloaded → {os.path.basename(save_path)}",
+            "status": f"Downloaded → {pdf_name}",
             "icon": "✅",
             "link": link,
-            "save_path": save_path,
+            "pdf_name": pdf_name,
+            "pdf_bytes": pdf_bytes,
         }
 
-    # Clean up partial file
-    if os.path.exists(save_path):
-        try:
-            os.remove(save_path)
-        except OSError:
-            pass
-
     icon = "⚠️" if "No Access" in message else "❌"
-    return {"name": name, "status": message, "icon": icon, "link": link, "save_path": None}
+    return {"name": name, "status": message, "icon": icon, "link": link,
+            "pdf_name": None, "pdf_bytes": None}
 
 
-def run_downloads(task_id: str, records: list[dict], save_folder: str):
+def run_downloads(task_id: str, records: list[dict]):
     """
     Background thread: spawns a pool of worker threads to download
-    all resumes concurrently, updating progress_store as each finishes.
+    all resumes concurrently into memory, updating progress_store as each finishes.
+    The final in-memory ZIP is built here and stored in progress_store.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    total       = len(records)
-    results     = []
-    saved_paths = []   # paths of successfully downloaded files (for ZIP)
-    downloaded  = 0
-    skipped     = 0
-    failed      = 0
-    lock        = threading.Lock()
+    total      = len(records)
+    results    = []          # display-safe results for the frontend
+    pdf_files  = []          # [(pdf_name, pdf_bytes), …] for ZIP assembly
+    downloaded = 0
+    skipped    = 0
+    failed     = 0
+    lock       = threading.Lock()
+
+    # Shared counter so duplicate names get _1, _2 suffixes
+    name_counter: dict = {}
+    counter_lock = threading.Lock()
 
     with progress_lock:
         progress_store[task_id] = {
-            "status":      "running",
-            "total":       total,
-            "done":        0,
-            "results":     [],
-            "summary":     {},
-            "save_folder": save_folder,
-            "saved_paths": [],
+            "status":   "running",
+            "total":    total,
+            "done":     0,
+            "results": [],
+            "summary": {},
+            "zip_bytes": None,   # will hold final ZIP bytes when done
         }
 
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, total)) as pool:
         futures = {
-            pool.submit(_download_one, rec, save_folder): rec
+            pool.submit(_download_one, rec, name_counter, counter_lock): rec
             for rec in records
         }
 
@@ -211,14 +213,15 @@ def run_downloads(task_id: str, records: list[dict], save_folder: str):
             result = future.result()
 
             with lock:
-                # Strip save_path before sending to frontend (internal only)
-                display_result = {k: v for k, v in result.items() if k != "save_path"}
+                # Strip internal bytes before sending to frontend
+                display_result = {k: v for k, v in result.items()
+                                  if k not in ("pdf_bytes", "pdf_name")}
                 results.append(display_result)
 
                 if result["icon"] == "✅":
                     downloaded += 1
-                    if result.get("save_path"):
-                        saved_paths.append(result["save_path"])
+                    if result.get("pdf_bytes") and result.get("pdf_name"):
+                        pdf_files.append((result["pdf_name"], result["pdf_bytes"]))
                 elif result["icon"] == "⚠️":
                     skipped += 1
                 else:
@@ -227,14 +230,23 @@ def run_downloads(task_id: str, records: list[dict], save_folder: str):
                 done_count = len(results)
 
             with progress_lock:
-                progress_store[task_id]["done"]        = done_count
-                progress_store[task_id]["results"]     = list(results)
-                progress_store[task_id]["saved_paths"] = list(saved_paths)
+                progress_store[task_id]["done"]    = done_count
+                progress_store[task_id]["results"] = list(results)
+
+    # ── Build in-memory ZIP ─────────────────────────────────────────────────
+    zip_bytes = None
+    if pdf_files:
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for pdf_name, pdf_data in pdf_files:
+                zf.writestr(pdf_name, pdf_data)
+        zip_bytes = zip_buf.getvalue()
 
     # ── Mark complete ───────────────────────────────────────────────────────
     with progress_lock:
-        progress_store[task_id]["status"]  = "done"
-        progress_store[task_id]["summary"] = {
+        progress_store[task_id]["status"]    = "done"
+        progress_store[task_id]["zip_bytes"] = zip_bytes
+        progress_store[task_id]["summary"]   = {
             "total":      total,
             "downloaded": downloaded,
             "skipped":    skipped,
@@ -330,15 +342,12 @@ def upload():
     if not records:
         return jsonify({"error": "No valid rows found in the Excel file."}), 400
 
-    # ── Create per-task temp folder & start background task ─────────────────
-    import tempfile
-    task_id     = str(time.time_ns())
-    save_folder = os.path.join(tempfile.gettempdir(), f"resumes_{task_id}")
-    os.makedirs(save_folder, exist_ok=True)
+    # ── Start background task (all in-memory, no temp folder needed) ─────────
+    task_id = str(time.time_ns())
 
     thread = threading.Thread(
         target=run_downloads,
-        args=(task_id, records, save_folder),
+        args=(task_id, records),
         daemon=True,
     )
     thread.start()
@@ -364,8 +373,8 @@ def progress(task_id: str):
 @app.route("/download-zip/<task_id>")
 def download_zip(task_id: str):
     """
-    Build an in-memory ZIP of all successfully downloaded PDFs for this task
-    and send it to the browser as 'resumes.zip'.
+    Serve the pre-built in-memory ZIP for this task as 'resumes.zip'.
+    The ZIP was assembled during the download phase, so no temp files are needed.
     """
     from flask import send_file
 
@@ -378,20 +387,12 @@ def download_zip(task_id: str):
     if data.get("status") != "done":
         return jsonify({"error": "Downloads are still in progress."}), 400
 
-    saved_paths = data.get("saved_paths", [])
-    if not saved_paths:
+    zip_bytes = data.get("zip_bytes")
+    if not zip_bytes:
         return jsonify({"error": "No files were downloaded successfully."}), 400
 
-    # Build ZIP in memory
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path in saved_paths:
-            if os.path.exists(path):
-                zf.write(path, arcname=os.path.basename(path))
-
-    zip_buffer.seek(0)
     return send_file(
-        zip_buffer,
+        io.BytesIO(zip_bytes),
         mimetype="application/zip",
         as_attachment=True,
         download_name="resumes.zip",
