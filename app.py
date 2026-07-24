@@ -132,7 +132,7 @@ def download_resume_bytes(url: str, timeout: int = 30) -> tuple[bool, str, bytes
 
 # ─── Background Download Worker ───────────────────────────────────────────────
 
-MAX_WORKERS = 20   # simultaneous download threads
+MAX_WORKERS = 10   # keep under Google Drive rate limits for large batches
 
 
 def _download_one(record: dict, name_counter: dict, counter_lock: threading.Lock) -> dict:
@@ -175,35 +175,27 @@ def _download_one(record: dict, name_counter: dict, counter_lock: threading.Lock
 
 def run_downloads(task_id: str, records: list[dict]):
     """
-    Background thread: spawns a pool of worker threads to download
-    all resumes concurrently into memory, updating progress_store as each finishes.
-    The final in-memory ZIP is built here and stored in progress_store.
+    Background thread: downloads all resumes concurrently and writes each
+    PDF directly into a shared in-memory ZIP as it arrives, then discards
+    the raw bytes. Peak RAM = compressed ZIP only (not raw + ZIP).
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     total      = len(records)
-    results    = []          # display-safe results for the frontend
-    pdf_files  = []          # [(pdf_name, pdf_bytes), …] for ZIP assembly
+    results    = []
     downloaded = 0
     skipped    = 0
     failed     = 0
-    lock       = threading.Lock()
+    lock       = threading.Lock()       # protects results list + counters
 
     # Shared counter so duplicate names get _1, _2 suffixes
     name_counter: dict = {}
     counter_lock = threading.Lock()
 
-    # Entry already created by upload handler — just confirm it's ready
-    with progress_lock:
-        if task_id not in progress_store:
-            progress_store[task_id] = {
-                "status":    "running",
-                "total":     total,
-                "done":      0,
-                "results":   [],
-                "summary":   {},
-                "zip_bytes": None,
-            }
+    # Build ZIP progressively – write each PDF in as it arrives
+    zip_buf  = io.BytesIO()
+    zip_file = zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED)
+    zip_lock = threading.Lock()   # zipfile is NOT thread-safe
 
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, total)) as pool:
         futures = {
@@ -223,7 +215,10 @@ def run_downloads(task_id: str, records: list[dict]):
                 if result["icon"] == "✅":
                     downloaded += 1
                     if result.get("pdf_bytes") and result.get("pdf_name"):
-                        pdf_files.append((result["pdf_name"], result["pdf_bytes"]))
+                        # Write to ZIP immediately, then release raw bytes
+                        with zip_lock:
+                            zip_file.writestr(result["pdf_name"], result["pdf_bytes"])
+                        result["pdf_bytes"] = None   # free RAM right away
                 elif result["icon"] == "⚠️":
                     skipped += 1
                 else:
@@ -235,14 +230,9 @@ def run_downloads(task_id: str, records: list[dict]):
                 progress_store[task_id]["done"]    = done_count
                 progress_store[task_id]["results"] = list(results)
 
-    # ── Build in-memory ZIP ─────────────────────────────────────────────────
-    zip_bytes = None
-    if pdf_files:
-        zip_buf = io.BytesIO()
-        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            for pdf_name, pdf_data in pdf_files:
-                zf.writestr(pdf_name, pdf_data)
-        zip_bytes = zip_buf.getvalue()
+    # Finalise ZIP
+    zip_file.close()
+    zip_bytes = zip_buf.getvalue() if downloaded > 0 else None
 
     # ── Mark complete ───────────────────────────────────────────────────────
     with progress_lock:
@@ -254,8 +244,6 @@ def run_downloads(task_id: str, records: list[dict]):
             "skipped":    skipped,
             "failed":     failed,
         }
-
-
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
