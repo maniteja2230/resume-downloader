@@ -4,10 +4,142 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Bulk Resume Downloader – Placement Team Tool</title>
-  <meta name="description" content="Upload an Excel file with Google Drive resume links. Download all publicly accessible PDFs." />
+  <meta name="description" content="Upload an Excel file with Google Drive resume links. Download all publicly accessible PDFs in batches." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    /* ── Batch-specific styles ── */
+    .batch-size-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .batch-size-row label {
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-muted, #888);
+      white-space: nowrap;
+    }
+    .batch-size-input {
+      width: 80px;
+      padding: 6px 10px;
+      border: 1.5px solid var(--border, #ddd);
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-family: inherit;
+      background: var(--input-bg, #fff);
+      color: var(--text, #222);
+    }
+    .batch-size-hint {
+      font-size: 0.78rem;
+      color: var(--text-muted, #aaa);
+    }
+
+    /* Batch cards in results */
+    .batch-section {
+      margin-bottom: 24px;
+      border: 1.5px solid var(--border, #e0e0e0);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .batch-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: var(--card-header-bg, #f7f7f7);
+      border-bottom: 1.5px solid var(--border, #e0e0e0);
+    }
+    .batch-label {
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+    .batch-status-badge {
+      font-size: 0.78rem;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-weight: 600;
+    }
+    .badge-queued   { background: #f0f0f0; color: #888; }
+    .badge-running  { background: #fff3cd; color: #856404; }
+    .badge-done     { background: #d4edda; color: #155724; }
+    .badge-failed   { background: #f8d7da; color: #721c24; }
+
+    .batch-body { padding: 12px 16px; }
+
+    .batch-progress-wrap {
+      height: 6px;
+      background: #eee;
+      border-radius: 4px;
+      margin: 8px 0;
+      overflow: hidden;
+    }
+    .batch-progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #7c3aed, #a78bfa);
+      border-radius: 4px;
+      transition: width 0.3s ease;
+    }
+    .batch-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      color: var(--text-muted, #888);
+      margin-bottom: 4px;
+    }
+    .batch-zip-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 10px;
+      padding: 7px 16px;
+      background: linear-gradient(135deg, #059669, #10b981);
+      color: white;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: opacity 0.2s;
+    }
+    .batch-zip-btn:hover { opacity: 0.88; }
+
+    .batch-chip-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    .b-chip {
+      font-size: 0.75rem;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-weight: 500;
+    }
+    .b-chip-ok   { background: #d4edda; color: #155724; }
+    .b-chip-warn { background: #fff3cd; color: #856404; }
+    .b-chip-fail { background: #f8d7da; color: #721c24; }
+
+    .overall-summary {
+      background: linear-gradient(135deg, #f3e8ff, #ede9fe);
+      border: 1.5px solid #c4b5fd;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 20px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .overall-chip {
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 5px 14px;
+      border-radius: 20px;
+      background: white;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+  </style>
 </head>
 <body>
   <!-- ── Header ─────────────────────────────────────────── -->
@@ -49,6 +181,14 @@
           </div>
         </div>
 
+        <!-- Batch Size -->
+        <div class="batch-size-row">
+          <label for="batch_size">Batch size:</label>
+          <input type="number" id="batch_size" name="batch_size" class="batch-size-input"
+                 value="250" min="50" max="500" step="50" />
+          <span class="batch-size-hint">resumes per batch (50–500). For 766 resumes → 4 batches of 250.</span>
+        </div>
+
         <!-- Error Banner -->
         <div class="alert alert-error" id="errorBanner" style="display:none;">
           <span class="alert-icon">⚠️</span>
@@ -64,7 +204,7 @@
 
     <!-- Progress Card -->
     <section class="card progress-card" id="progressSection" style="display:none;">
-      <h2 class="card-title">Downloading Resumes…</h2>
+      <h2 class="card-title" id="progressTitle">Downloading Resumes…</h2>
 
       <div class="progress-meta">
         <span id="progressCount" class="progress-count">0 / 0</span>
@@ -81,24 +221,15 @@
     <section class="card results-card" id="resultsSection" style="display:none;">
       <h2 class="card-title">Results</h2>
 
-      <!-- Summary Chips -->
-      <div class="summary-chips" id="summaryChips"></div>
+      <!-- Overall summary (shown when all batches done) -->
+      <div class="overall-summary" id="overallSummary" style="display:none;"></div>
 
-      <!-- Result List -->
-      <ul class="result-list" id="resultList"></ul>
-
-      <!-- ZIP Download Button -->
-      <a class="btn btn-zip" id="zipBtn" style="display:none;" download>
-        <span class="btn-icon">🗜️</span> Download All as ZIP
-      </a>
+      <!-- Per-batch sections -->
+      <div id="batchSections"></div>
 
       <!-- Reset Button -->
-      <button class="btn btn-secondary" id="resetBtn">
-        ↩ Start Over
-      </button>
+      <button class="btn btn-secondary" id="resetBtn">↩ Start Over</button>
     </section>
-
-   
 
   </main>
 
@@ -127,120 +258,160 @@
     const progressSection = document.getElementById('progressSection');
     const resultsSection  = document.getElementById('resultsSection');
 
+    const progressTitle   = document.getElementById('progressTitle');
     const progressCount   = document.getElementById('progressCount');
     const progressPercent = document.getElementById('progressPercent');
     const progressFill    = document.getElementById('progressFill');
     const progressLabel   = document.getElementById('progressLabel');
 
-    const summaryChips = document.getElementById('summaryChips');
-    const resultList   = document.getElementById('resultList');
-    const zipBtn       = document.getElementById('zipBtn');
-    const resetBtn     = document.getElementById('resetBtn');
+    const overallSummary = document.getElementById('overallSummary');
+    const batchSections  = document.getElementById('batchSections');
+    const resetBtn       = document.getElementById('resetBtn');
 
-    let currentTaskId = null;
     let pollTimer = null;
 
     // ── File drag-and-drop ────────────────────────────────────
     dropZone.addEventListener('click', () => fileInput.click());
-
-    dropZone.addEventListener('dragover', e => {
-      e.preventDefault();
-      dropZone.classList.add('drag-over');
-    });
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
     dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
     dropZone.addEventListener('drop', e => {
       e.preventDefault();
       dropZone.classList.remove('drag-over');
-      const files = e.dataTransfer.files;
-      if (files.length) setFile(files[0]);
+      if (e.dataTransfer.files.length) setFile(e.dataTransfer.files[0]);
     });
-
-    fileInput.addEventListener('change', () => {
-      if (fileInput.files.length) setFile(fileInput.files[0]);
-    });
-
-    // Stop click on the hidden input from bubbling up to dropZone
-    // (prevents the file dialog from opening twice)
+    fileInput.addEventListener('change', () => { if (fileInput.files.length) setFile(fileInput.files[0]); });
     fileInput.addEventListener('click', e => e.stopPropagation());
-
-    removeFileBtn.addEventListener('click', e => {
-      e.stopPropagation();
-      clearFile();
-    });
+    removeFileBtn.addEventListener('click', e => { e.stopPropagation(); clearFile(); });
 
     function setFile(file) {
       fileNameEl.textContent = file.name;
       dropContent.style.display = 'none';
       fileChosen.style.display  = 'flex';
     }
-
     function clearFile() {
       fileInput.value = '';
       fileChosen.style.display  = 'none';
       dropContent.style.display = 'flex';
     }
 
-    // ── Show / hide error ─────────────────────────────────────
+    // ── Error banner ──────────────────────────────────────────
     function showError(msg) {
       errorMsg.textContent = msg;
       errorBanner.style.display = 'flex';
       submitBtn.disabled = false;
       submitBtn.innerHTML = '<span class="btn-icon">⬇️</span> Download All Resumes';
     }
-
-    function hideError() {
-      errorBanner.style.display = 'none';
-    }
+    function hideError() { errorBanner.style.display = 'none'; }
 
     // ── Form submit ───────────────────────────────────────────
     form.addEventListener('submit', async e => {
       e.preventDefault();
       hideError();
-
-      if (!fileInput.files.length) {
-        showError('Please select an Excel file.');
-        return;
-      }
+      if (!fileInput.files.length) { showError('Please select an Excel file.'); return; }
 
       submitBtn.disabled = true;
       submitBtn.innerHTML = '<span class="spinner"></span> Uploading…';
 
-      const data = new FormData(form);
-
       try {
-        const res  = await fetch('/upload', { method: 'POST', body: data });
+        const res  = await fetch('/upload', { method: 'POST', body: new FormData(form) });
         const json = await res.json();
 
-        if (!res.ok || json.error) {
-          showError(json.error || 'Upload failed. Please try again.');
-          return;
-        }
+        if (!res.ok || json.error) { showError(json.error || 'Upload failed.'); return; }
 
-        // Start polling
-        currentTaskId = json.task_id;
-        startProgress(json.task_id, json.total);
+        // Start batch processing
+        startBatchProcessing(json);
 
       } catch (err) {
         showError('Network error: ' + err.message);
       }
     });
 
-    // ── Progress polling ──────────────────────────────────────
-    function startProgress(taskId, total) {
-      uploadSection.style.display   = 'none';
-      progressSection.style.display = 'block';
-      updateProgressBar(0, total);
+    // ── Batch Processing ──────────────────────────────────────
+    function startBatchProcessing(jobInfo) {
+      const { batches, total, total_batches } = jobInfo;
 
+      uploadSection.style.display   = 'none';
+      resultsSection.style.display  = 'block';
+      batchSections.innerHTML       = '';
+      overallSummary.style.display  = 'none';
+
+      // Create a UI card for every batch upfront
+      batches.forEach(b => createBatchCard(b, total_batches));
+
+      // Process batches sequentially
+      let overallDownloaded = 0, overallSkipped = 0, overallFailed = 0;
+      let batchIndex = 0;
+
+      function processNext() {
+        if (batchIndex >= batches.length) {
+          // All done – show combined summary
+          showOverallSummary(total, overallDownloaded, overallSkipped, overallFailed);
+          return;
+        }
+
+        const batch = batches[batchIndex];
+        showProgressCard(batch.batch_num, total_batches, batch.count);
+        pollBatch(batch, (summary) => {
+          overallDownloaded += summary.downloaded;
+          overallSkipped    += summary.skipped;
+          overallFailed     += summary.failed;
+          batchIndex++;
+          processNext();
+        });
+      }
+
+      processNext();
+    }
+
+    // Create a placeholder card for each batch
+    function createBatchCard(batch, total_batches) {
+      const el = document.createElement('div');
+      el.className = 'batch-section';
+      el.id = `batch-card-${batch.task_id}`;
+      el.innerHTML = `
+        <div class="batch-header">
+          <span class="batch-label">Batch ${batch.batch_num} of ${total_batches} &nbsp;·&nbsp; ${batch.count} resumes</span>
+          <span class="batch-status-badge badge-queued" id="badge-${batch.task_id}">Queued</span>
+        </div>
+        <div class="batch-body" id="body-${batch.task_id}">
+          <div class="batch-meta">
+            <span id="bmeta-${batch.task_id}">Waiting…</span>
+            <span></span>
+          </div>
+          <div class="batch-progress-wrap">
+            <div class="batch-progress-fill" id="bfill-${batch.task_id}" style="width:0%"></div>
+          </div>
+        </div>
+      `;
+      batchSections.appendChild(el);
+    }
+
+    // Show the top-level progress bar for the current active batch
+    function showProgressCard(batchNum, totalBatches, count) {
+      progressSection.style.display = 'block';
+      progressTitle.textContent = totalBatches > 1
+        ? `Batch ${batchNum} of ${totalBatches} — Downloading…`
+        : 'Downloading Resumes…';
+      updateProgressBar(0, count);
+      progressLabel.textContent = 'Starting…';
+    }
+
+    // Poll a single batch until done
+    function pollBatch(batch, onDone) {
+      const { task_id } = batch;
       let notFoundRetries = 0;
-      const MAX_RETRIES   = 15;  // tolerate Render cold starts (~12s grace)
+      const MAX_RETRIES = 15;
+
+      // Mark badge as running
+      const badge = document.getElementById(`badge-${task_id}`);
+      if (badge) { badge.textContent = 'Running'; badge.className = 'batch-status-badge badge-running'; }
 
       pollTimer = setInterval(async () => {
         try {
-          const res  = await fetch(`/progress/${taskId}`);
+          const res  = await fetch(`/progress/${task_id}`);
           const data = await res.json();
 
           if (data.error) {
-            // "Task not found" can happen if server restarted — retry a few times
             if (res.status === 404 && notFoundRetries < MAX_RETRIES) {
               notFoundRetries++;
               progressLabel.textContent = `Reconnecting… (${notFoundRetries}/${MAX_RETRIES})`;
@@ -254,22 +425,63 @@
             return;
           }
 
-          notFoundRetries = 0;   // reset on success
-          updateProgressBar(data.done, data.total);
+          notFoundRetries = 0;
 
-          if (data.status === 'done') {
-            clearInterval(pollTimer);
-            showResults(data.results, data.summary, currentTaskId, data.has_zip);
-          } else {
-            const latest = data.results[data.results.length - 1];
-            if (latest) {
-              progressLabel.textContent = `Processing: ${latest.name}`;
+          // Update overall top progress bar
+          const done = data.done || 0;
+          const tot  = data.total || batch.count;
+          updateProgressBar(done, tot);
+
+          // Update per-batch mini progress bar
+          const pct = tot ? Math.round((done / tot) * 100) : 0;
+          const bfill = document.getElementById(`bfill-${task_id}`);
+          const bmeta = document.getElementById(`bmeta-${task_id}`);
+          if (bfill) bfill.style.width = pct + '%';
+          if (bmeta) bmeta.textContent = `${done} / ${tot} (${pct}%)`;
+
+          if (data.status === 'done' || data.status === 'queued') {
+            if (data.status === 'done') {
+              clearInterval(pollTimer);
+              updateProgressBar(tot, tot);
+              finalizeBatchCard(task_id, batch, data);
+              onDone(data.summary || { downloaded: 0, skipped: 0, failed: 0 });
             }
+          } else {
+            const latest = (data.results || []).slice(-1)[0];
+            if (latest) progressLabel.textContent = `Processing: ${latest.name}`;
           }
+
         } catch {
           // network blip – keep polling
         }
       }, 800);
+    }
+
+    // Fill in a batch card with results + ZIP button
+    function finalizeBatchCard(task_id, batch, data) {
+      const badge = document.getElementById(`badge-${task_id}`);
+      const body  = document.getElementById(`body-${task_id}`);
+      if (!badge || !body) return;
+
+      const s = data.summary || {};
+      badge.textContent  = 'Done ✅';
+      badge.className = 'batch-status-badge badge-done';
+
+      let html = `
+        <div class="batch-chip-row">
+          <span class="b-chip b-chip-ok">✅ Downloaded: ${s.downloaded || 0}</span>
+          <span class="b-chip b-chip-warn">⚠️ Skipped: ${s.skipped || 0}</span>
+          <span class="b-chip b-chip-fail">❌ Failed: ${s.failed || 0}</span>
+        </div>
+      `;
+
+      if (data.has_zip) {
+        html += `<a class="batch-zip-btn" href="/download-zip/${task_id}" download>
+                   🗜️ Download Batch ${batch.batch_num} ZIP
+                 </a>`;
+      }
+
+      body.innerHTML = html;
     }
 
     function updateProgressBar(done, total) {
@@ -279,72 +491,37 @@
       progressPercent.textContent = pct + '%';
     }
 
-    // ── Results ───────────────────────────────────────────────
-    function showResults(results, summary, taskId, hasZip) {
+    function showOverallSummary(total, downloaded, skipped, failed) {
       progressSection.style.display = 'none';
-      resultsSection.style.display  = 'block';
 
-      // Summary chips
-      summaryChips.innerHTML = `
-        <div class="chip chip-total">📦 Total: ${summary.total}</div>
-        <div class="chip chip-success">✅ Downloaded: ${summary.downloaded}</div>
-        <div class="chip chip-warn">⚠️ Skipped: ${summary.skipped}</div>
-        <div class="chip chip-fail">❌ Failed: ${summary.failed}</div>
-      `;
-
-      // ZIP button — only show if backend confirmed a ZIP is ready
-      if (hasZip && taskId) {
-        zipBtn.href = `/download-zip/${taskId}`;
-        zipBtn.style.display = 'inline-flex';
-      } else {
-        zipBtn.style.display = 'none';
-      }
-
-      // Result rows
-      resultList.innerHTML = '';
-      results.forEach(r => {
-        const li = document.createElement('li');
-        li.classList.add('result-item');
-        if (r.icon === '✅') li.classList.add('result-ok');
-        else if (r.icon === '⚠️') li.classList.add('result-warn');
-        else li.classList.add('result-fail');
-
-        li.innerHTML = `
-          <span class="result-icon">${r.icon}</span>
-          <div class="result-info">
-            <span class="result-name">${escapeHtml(r.name)}</span>
-            <span class="result-status">${escapeHtml(r.status)}</span>
-          </div>
+      if (document.querySelectorAll('.batch-section').length > 1) {
+        overallSummary.style.display = 'flex';
+        overallSummary.innerHTML = `
+          <span class="overall-chip">📦 Total: ${total}</span>
+          <span class="overall-chip">✅ Downloaded: ${downloaded}</span>
+          <span class="overall-chip">⚠️ Skipped: ${skipped}</span>
+          <span class="overall-chip">❌ Failed: ${failed}</span>
         `;
-        resultList.appendChild(li);
-      });
+      }
     }
 
     // ── Reset ─────────────────────────────────────────────────
     resetBtn.addEventListener('click', () => {
+      clearInterval(pollTimer);
       clearFile();
-      resultList.innerHTML   = '';
-      summaryChips.innerHTML = '';
-      zipBtn.style.display          = 'none';
-      zipBtn.href                   = '#';
-      currentTaskId                 = null;
-      resultsSection.style.display  = 'none';
+      batchSections.innerHTML = '';
+      overallSummary.style.display = 'none';
       progressSection.style.display = 'none';
+      resultsSection.style.display  = 'none';
       showUploadSection();
     });
 
     function showUploadSection() {
       submitBtn.disabled = false;
       submitBtn.innerHTML = '<span class="btn-icon">⬇️</span> Download All Resumes';
-      // Always hide other sections before showing upload
       progressSection.style.display = 'none';
       resultsSection.style.display  = 'none';
       uploadSection.style.display   = 'block';
-    }
-
-    // ── Helpers ───────────────────────────────────────────────
-    function escapeHtml(str) {
-      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 
   })();

@@ -244,6 +244,18 @@ def run_downloads(task_id: str, records: list[dict]):
             "skipped":    skipped,
             "failed":     failed,
         }
+def run_all_batches(batch_tasks: list[dict]):
+    """
+    Orchestrator thread: runs each batch sequentially with a short pause
+    between batches to avoid Google Drive rate limiting.
+    """
+    for i, batch in enumerate(batch_tasks):
+        with progress_lock:
+            progress_store[batch["task_id"]]["status"] = "running"
+        run_downloads(batch["task_id"], batch["records"])
+        if i < len(batch_tasks) - 1:
+            time.sleep(3)  # brief pause between batches
+
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
@@ -332,26 +344,53 @@ def upload():
     if not records:
         return jsonify({"error": "No valid rows found in the Excel file."}), 400
 
-    # ── Create task entry BEFORE starting thread (prevents 404 race) ──────────
-    task_id = str(time.time_ns())
-    with progress_lock:
-        progress_store[task_id] = {
-            "status":    "running",
-            "total":     len(records),
-            "done":      0,
-            "results":   [],
-            "summary":   {},
-            "zip_bytes": None,
-        }
+    # ── Batch split ────────────────────────────────────────────────────────
+    try:
+        batch_size = int(request.form.get("batch_size", 250))
+        batch_size = max(50, min(500, batch_size))
+    except (ValueError, TypeError):
+        batch_size = 250
+
+    batches = [records[i:i + batch_size] for i in range(0, len(records), batch_size)]
+    total_batches = len(batches)
+
+    # Pre-create ALL task entries before starting any thread
+    batch_tasks = []
+    for i, batch_records in enumerate(batches):
+        task_id = str(time.time_ns()) + f"_{i}"
+        with progress_lock:
+            progress_store[task_id] = {
+                "status":       "queued",   # orchestrator will flip to "running"
+                "total":        len(batch_records),
+                "done":         0,
+                "results":      [],
+                "summary":      {},
+                "zip_bytes":    None,
+                "batch_num":    i + 1,
+                "total_batches": total_batches,
+            }
+        batch_tasks.append({"task_id": task_id, "records": batch_records})
 
     thread = threading.Thread(
-        target=run_downloads,
-        args=(task_id, records),
+        target=run_all_batches,
+        args=(batch_tasks,),
         daemon=True,
     )
     thread.start()
 
-    return jsonify({"task_id": task_id, "total": len(records)})
+    return jsonify({
+        "batches": [
+            {
+                "task_id":   bt["task_id"],
+                "batch_num": i + 1,
+                "count":     len(bt["records"]),
+            }
+            for i, bt in enumerate(batch_tasks)
+        ],
+        "total":         len(records),
+        "total_batches": total_batches,
+        "batch_size":    batch_size,
+    })
 
 
 @app.route("/progress/<task_id>")
@@ -377,8 +416,7 @@ def progress(task_id: str):
 @app.route("/download-zip/<task_id>")
 def download_zip(task_id: str):
     """
-    Serve the pre-built in-memory ZIP for this task as 'resumes.zip'.
-    The ZIP was assembled during the download phase, so no temp files are needed.
+    Serve the pre-built in-memory ZIP for this task as 'resumes_batch_N.zip'.
     """
     from flask import send_file
 
@@ -395,11 +433,15 @@ def download_zip(task_id: str):
     if not zip_bytes:
         return jsonify({"error": "No files were downloaded successfully."}), 400
 
+    batch_num     = data.get("batch_num", 1)
+    total_batches = data.get("total_batches", 1)
+    filename      = f"resumes_batch{batch_num}_of_{total_batches}.zip" if total_batches > 1 else "resumes.zip"
+
     return send_file(
         io.BytesIO(zip_bytes),
         mimetype="application/zip",
         as_attachment=True,
-        download_name="resumes.zip",
+        download_name=filename,
     )
 
 
