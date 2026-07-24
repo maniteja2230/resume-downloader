@@ -232,7 +232,7 @@
       updateProgressBar(0, total);
 
       let notFoundRetries = 0;
-      const MAX_RETRIES   = 4;   // tolerate brief server restarts
+      const MAX_RETRIES   = 15;  // tolerate Render cold starts (~12s grace)
 
       pollTimer = setInterval(async () => {
         try {

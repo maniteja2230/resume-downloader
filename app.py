@@ -193,15 +193,17 @@ def run_downloads(task_id: str, records: list[dict]):
     name_counter: dict = {}
     counter_lock = threading.Lock()
 
+    # Entry already created by upload handler — just confirm it's ready
     with progress_lock:
-        progress_store[task_id] = {
-            "status":   "running",
-            "total":    total,
-            "done":     0,
-            "results": [],
-            "summary": {},
-            "zip_bytes": None,   # will hold final ZIP bytes when done
-        }
+        if task_id not in progress_store:
+            progress_store[task_id] = {
+                "status":    "running",
+                "total":     total,
+                "done":      0,
+                "results":   [],
+                "summary":   {},
+                "zip_bytes": None,
+            }
 
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, total)) as pool:
         futures = {
@@ -342,8 +344,17 @@ def upload():
     if not records:
         return jsonify({"error": "No valid rows found in the Excel file."}), 400
 
-    # ── Start background task (all in-memory, no temp folder needed) ─────────
+    # ── Create task entry BEFORE starting thread (prevents 404 race) ──────────
     task_id = str(time.time_ns())
+    with progress_lock:
+        progress_store[task_id] = {
+            "status":    "running",
+            "total":     len(records),
+            "done":      0,
+            "results":   [],
+            "summary":   {},
+            "zip_bytes": None,
+        }
 
     thread = threading.Thread(
         target=run_downloads,
